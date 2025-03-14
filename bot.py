@@ -1,9 +1,9 @@
 import os
-import requests
+import json
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from aiohttp import web
+from aiohttp import web, ClientSession
 import asyncio
 import traceback
 
@@ -72,8 +72,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         
         # Отправка запроса
-        async with aiohttp.ClientSession() as session:
+        async with ClientSession() as session:
             async with session.post(API_URL, headers=HEADERS, json=payload) as response:
+                if response.status != 200:
+                    raise Exception(f"Ошибка API: {response.status}")
                 data = await response.json()
         
         # Обработка ошибок API
