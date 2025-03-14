@@ -3,7 +3,8 @@ import requests
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from flask import Flask, request
+from aiohttp import web
+import asyncio
 import traceback
 
 # --- Безопасная загрузка ключей ---
@@ -71,16 +72,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         
         # Отправка запроса
-        response = requests.post(
-            API_URL,
-            headers=HEADERS,
-            json=payload,
-            timeout=15
-        )
-        
-        # Проверка HTTP статуса
-        response.raise_for_status()
-        data = response.json()
+        async with aiohttp.ClientSession() as session:
+            async with session.post(API_URL, headers=HEADERS, json=payload) as response:
+                data = await response.json()
         
         # Обработка ошибок API
         if "error" in data:
@@ -107,30 +101,34 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Попробуй изменить запрос или повторить позже."
         )
 
-# --- Создание Flask-приложения ---
-app = Flask(__name__)
-
-# --- Создание экземпляра приложения Telegram ---
-application = Application.builder().token(TELEGRAM_TOKEN).build()
-application.add_handler(CommandHandler("start", start))
-application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-# --- Обработчик для вебхука ---
-@app.route('/webhook', methods=['POST'])
-def webhook():
-    update = Update.de_json(request.get_json(), application.bot)
-    application.update_queue.put(update)
-    return 'OK'
+async def handle_webhook(request):
+    try:
+        data = await request.json()
+        update = Update.de_json(data, application.bot)
+        await application.process_update(update)
+        return web.Response(text="OK")
+    except Exception as e:
+        print(f"Ошибка обработки вебхука: {e}")
+        return web.Response(status=500, text="Ошибка сервера")
 
 if __name__ == "__main__":
     try:
+        # Создание экземпляра приложения Telegram
+        application = Application.builder().token(TELEGRAM_TOKEN).build()
+        application.add_handler(CommandHandler("start", start))
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        
+        # Создание веб-приложения AIOHTTP
+        app = web.Application()
+        app.router.add_post('/webhook', handle_webhook)
+        
         # Установка вебхука
         webhook_url = f"https://{os.environ['RENDER_EXTERNAL_HOSTNAME']}/webhook"
-        application.bot.set_webhook(webhook_url)
+        asyncio.run(application.bot.set_webhook(webhook_url))
         
-        # Получение порта из переменной окружения
+        # Запуск веб-сервера
         port = int(os.environ.get('PORT', 5000))
-        app.run(host='0.0.0.0', port=port)
+        web.run_app(app, host='0.0.0.0', port=port)
     except Exception as e:
         print(f"⛔ Критическая ошибка: {str(e)}")
         exit(1)
