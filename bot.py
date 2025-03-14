@@ -3,7 +3,8 @@ import requests
 from dotenv import load_dotenv
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-import traceback  # Для детальной информации об ошибках
+from flask import Flask, request
+import traceback
 
 # --- Безопасная загрузка ключей ---
 load_dotenv()
@@ -106,12 +107,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Попробуй изменить запрос или повторить позже."
         )
 
+# --- Создание Flask-приложения ---
+app = Flask(__name__)
+
+# --- Создание экземпляра приложения Telegram ---
+application = Application.builder().token(TELEGRAM_TOKEN).build()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+# --- Обработчик для вебхука ---
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    update = Update.de_json(request.get_json(), application.bot)
+    application.update_queue.put(update)
+    return 'OK'
+
 if __name__ == "__main__":
     try:
-        app = Application.builder().token(TELEGRAM_TOKEN).build()
-        app.add_handler(CommandHandler("start", start))
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        app.run_polling()
+        # Установка вебхука
+        webhook_url = f"https://{os.environ['RENDER_EXTERNAL_HOSTNAME']}/webhook"
+        application.bot.set_webhook(webhook_url)
+        
+        # Получение порта из переменной окружения
+        port = int(os.environ.get('PORT', 5000))
+        app.run(host='0.0.0.0', port=port)
     except Exception as e:
         print(f"⛔ Критическая ошибка: {str(e)}")
         exit(1)
